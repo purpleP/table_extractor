@@ -1,46 +1,54 @@
-import cv as cv
+from functools import reduce
+
+import cv2 as cv
 import numpy as np
 
 
-def blocks(data, value):
-    isvalue = np.concatenate(([value], np.equal(a, value).view(np.int8), [value]))
-    return np.where(np.abs(np.diff(isvalue)) == 1)[0].reshape(-1, 2)
+def show(im, title='Image'):
+    cv.imshow(title, im)
+    cv.waitKey(0)
 
 
-def find_non_min(array, axis):
-    means = cv.reduce(array, axis, cv.REDUCE_AVG, dtype=cv.CV_32F).flatten()
-    blocks = blocks(means, 255)
-    centers = (blocks[:,0] + blocks[:,1] - 1) / 2
-    mkslice = lambda s, e: (slice(None), slice(s, e))
-    if axis:
-        mkslice = lambda s, e: (slice(s, e), slice(None))
-    return np.stack(array[mkslice(s, e)] for start, end in zip(centers, centers[1:]))
+def consecutive(arr, axis):
+    nonempty_rows = np.where(arr.any(axis=axis))[0]
+    slices_ends = np.where(np.diff(nonempty_rows) > 1)[0]
+    slices_starts = np.insert(slices_ends + 1, 0, 0)
+    slices_ends = np.insert(slices_ends, len(slices_ends), len(nonempty_rows) - 1)
+    return np.dstack((nonempty_rows[slices_starts], nonempty_rows[slices_ends]))[0]
+
+
+def intervals(arr):
+    return np.diff(np.hstack(arr)[1:-1].reshape(-1, 2)).flatten()
+
+
+def join_rects(threshold, bounds):
+    if len(bounds) <= 1:
+        return bounds
+    def join(acc, bounds):
+        (s1, e1), (s2, e2) = acc[-1], bounds
+        if s2 - e1 <= threshold:
+            acc[-1] = (s1, e2)
+        else:
+            acc.append((s2, e2))
+        return acc
+    return np.array(reduce(join, bounds[1:], [bounds[0]]))
+
+
+def find_aligned(bounds):
+    pass
 
 
 img = cv.imread('1.tiff', cv.IMREAD_GRAYSCALE)
 _, wb = cv.threshold(cv.imread('1.tiff', cv.IMREAD_GRAYSCALE), 127, 255, cv.THRESH_BINARY_INV)
-row_means = cv.reduce(wb, 1, cv.REDUCE_AVG, dtype=cv.CV_32F).flatten()
-row_gaps = zero_runs(row_means)
-row_cutpoints = (row_gaps[:,0] + row_gaps[:,1] - 1) / 2
+letters = [
+    (start_end, consecutive(wb[slice(*start_end)], axis=0))
+    for start_end in consecutive(wb, axis=1)
+]
+threshold = np.percentile(np.concatenate([intervals(xs) for _, xs in letters]), 95)
+blocks = [(_, join_rects(threshold, xs)) for _, xs in letters]
 
-bounding_boxes = []
-for start, end in zip(row_cutpoints, row_cutpoints[1:]):
-    line = img[start:end]
-    line = img_gray_inverted[start:end]
 
-    column_means = cv.reduce(line_gray_inverted, 0, cv.REDUCE_AVG, dtype=cv.CV_32F).flatten()
-    column_gaps = zero_runs(column_means)
-    column_gap_sizes = column_gaps[:,1] - column_gaps[:,0]
-    column_cutpoints = (column_gaps[:,0] + column_gaps[:,1] - 1) / 2
-
-    filtered_cutpoints = column_cutpoints[column_gap_sizes > 5]
-
-    for xstart,xend in zip(filtered_cutpoints, filtered_cutpoints[1:]):
-        bounding_boxes.append(((xstart, start), (xend, end)))
-
-    visualize_vp("article_vp_%02d.png" % n, line, column_means, filtered_cutpoints)
-
-result = img.copy()
-
-for bounding_box in bounding_boxes:
-    cv.rectangle(result, bounding_box[0], bounding_box[1], (255,0,0), 2)
+for (y1, y2), xs in blocks:
+    for x1, x2 in xs:
+        cv.rectangle(wb, (x1, y1), (x2, y2), 255)
+show(wb)
